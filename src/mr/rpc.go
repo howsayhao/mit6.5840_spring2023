@@ -24,6 +24,29 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type MapArgs struct {
+	Worker int
+	DoneMf string
+	Turn int
+}
+
+type MapReply struct {
+	Mf string
+	NReduce int
+	AllDone bool
+	GotFired bool
+}
+
+type ReduceArgs struct {
+	Worker int
+	ReduceTask string
+}
+
+type ReduceReply struct {
+	Reducer string
+	AllDone bool
+	GotFired bool
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
