@@ -25,6 +25,7 @@ type Coordinator struct {
 	reduceAssign map[string]int
 	nReduce int
 	register map[int]time.Time
+	backup map[string]bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -40,6 +41,15 @@ func (c *Coordinator) HandleRequest(args *MapArgs, reply *MapReply) error {
 			mutex.Unlock()
 			return nil
 		}	
+	}
+	for mapfile, backup := range c.backup {
+		if backup && c.mapAssign[mapfile] != -1 {
+			reply.Mf = mapfile
+			reply.NReduce = c.nReduce
+			c.register[args.Worker] = time.Now()
+			mutex.Unlock()
+			return nil
+		}
 	}
 	mutex.Unlock()
 	// fmt.Printf("no more idle map task\n")
@@ -76,15 +86,30 @@ func (c* Coordinator) OneMapDone(args *MapArgs, reply *MapReply) error {
 				}
 			}
 		} else {
-			c.mapTask[args.DoneMf] = true
-			delete(c.register, args.Worker)
-			fmt.Printf("process %v OneMapDone %v\n", args.Worker, args.DoneMf)
-			files, _ := ioutil.ReadDir(".")
-			for _, file := range files {
-				// os.Rename()不支持带./的，刚好../和pg-都是3个字符且没用，.txt是最后四个也删掉(不过这个好像没有影响)
-				if strings.HasPrefix(file.Name(), "mr-" + fmt.Sprintf("%v-%v", args.DoneMf[3:len(args.DoneMf)-4], args.Worker) + "-") {
-					fmt.Printf("renaming %v\n", file.Name())
-					os.Rename(filepath.Join(".", file.Name()), filepath.Join(".", file.Name()[:len(file.Name())-1]))				
+			if c.mapTask[args.DoneMf] {  // 说明是后备任务，否则不会自己还没有被炒鱿鱼就有自己的任务被接替了
+				delete(c.register, args.Worker)
+				fmt.Printf("late-process %v, backup map task %v done, local-deleting\n", args.Worker, args.DoneMf)
+				files, _ := ioutil.ReadDir(".")
+				for _, file := range files {
+					if strings.HasPrefix(file.Name(), "mr-" + fmt.Sprintf("%v-%v", args.DoneMf[3:len(args.DoneMf)-4], args.Worker) + "-") {
+						fmt.Printf("deleting %v\n", file.Name())
+						os.Remove(filepath.Join(".", file.Name()))					
+					}
+				}
+			} else {  // 即便是第一次后备任务，其他worker来了也没法影响reduce，因为没有经过master的重命名
+				c.mapTask[args.DoneMf] = true
+				if c.backup[args.DoneMf] {
+					c.backup[args.DoneMf] = false
+				}
+				delete(c.register, args.Worker)
+				fmt.Printf("process %v OneMapDone %v\n", args.Worker, args.DoneMf)
+				files, _ := ioutil.ReadDir(".")
+				for _, file := range files {
+					// os.Rename()不支持带./的，刚好../和pg-都是3个字符且没用，.txt是最后四个也删掉(不过这个好像没有影响)
+					if strings.HasPrefix(file.Name(), "mr-" + fmt.Sprintf("%v-%v", args.DoneMf[3:len(args.DoneMf)-4], args.Worker) + "-") {
+						fmt.Printf("renaming %v\n", file.Name())
+						os.Rename(filepath.Join(".", file.Name()), filepath.Join(".", file.Name()[:len(file.Name())-1]))				
+					}
 				}
 			}
 		}
@@ -200,24 +225,38 @@ func (c *Coordinator) Done() bool {
 
 func (c *Coordinator) UpdateState() {
 	mutex.Lock()
+	crash := 50 * time.Second
 	for xpid, t := range c.register {
 		elapse := time.Since(t)
-		if elapse >= 25 * time.Second {
+		if elapse >= crash {
 			// 删除在册正在执行任务但超时的进程，并清除对应的任务分配
 			fmt.Printf("fire the process %v\n", xpid)
 			delete(c.register, xpid)
-			// 清除该进程未完成的map任务
+			// 还原该进程未完成的map任务状态
 			for mtask, pid := range c.mapAssign {
 				if pid == xpid && !c.mapTask[mtask] {
 					c.mapAssign[mtask] = -1
 				}
 			}
-			// 清除该进程未完成的reduce任务
+			// 还原该进程未完成的reduce任务状态
 			for rtask, pid := range c.reduceAssign {
 				if pid == xpid && !c.reduceTask[rtask] {
 					c.reduceAssign[rtask] = -1
 				}
 			}
+		} else if elapse >= 10 * time.Second {
+			for mtask, pid := range c.mapAssign {
+				if pid == xpid && !c.mapTask[mtask] && !c.backup[mtask] {
+					c.backup[mtask] = true
+					fmt.Printf("backup the process %v\n", xpid)
+				}
+			}
+			// // 不处理reduce的backup
+			// for rtask, pid := range c.reduceAssign {
+			// 	if pid == xpid && !c.reduceTask[rtask] {
+			// 		c.reduceAssign[rtask] = -1
+			// 	}
+			// }
 		}
 	}
 	mutex.Unlock()
@@ -246,7 +285,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		c.reduceTask[fmt.Sprintf("%v", i)] = false
 	}
 	c.register = make(map[int]time.Time)
-
+	c.backup = make(map[string]bool)
 
 	ticker := time.NewTicker(10 * time.Second)
 	go func() {
