@@ -27,14 +27,12 @@ type ExampleReply struct {
 type MapArgs struct {
 	Worker int
 	DoneMf string
-	Turn int
 }
 
 type MapReply struct {
 	Mf string
 	NReduce int
 	AllDone bool
-	GotFired bool
 }
 
 type ReduceArgs struct {
@@ -45,7 +43,6 @@ type ReduceArgs struct {
 type ReduceReply struct {
 	Reducer string
 	AllDone bool
-	GotFired bool
 }
 
 // Cook up a unique-ish UNIX-domain socket name

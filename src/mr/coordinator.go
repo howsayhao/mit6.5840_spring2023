@@ -67,11 +67,10 @@ func (c* Coordinator) OneMapDone(args *MapArgs, reply *MapReply) error {
 	if args.DoneMf != "" {  // 有任务要提交
 		_, ok := c.register[args.Worker]
 		if !ok {  // 被炒鱿鱼
-			reply.GotFired = true
 			fmt.Printf("fire process %v, map task %v transfered to others, local-deleting\n", args.Worker, args.DoneMf)
 			files, _ := ioutil.ReadDir(".")
 			for _, file := range files {
-				if strings.HasPrefix(file.Name(), "mr-" + fmt.Sprintf("%v%v", args.Worker, args.Turn) + "-") {
+				if strings.HasPrefix(file.Name(), "mr-" + fmt.Sprintf("%v-%v", args.DoneMf[3:len(args.DoneMf)-4], args.Worker) + "-") {
 					fmt.Printf("deleting %v\n", file.Name())
 					os.Remove(filepath.Join(".", file.Name()))					
 				}
@@ -82,8 +81,9 @@ func (c* Coordinator) OneMapDone(args *MapArgs, reply *MapReply) error {
 			fmt.Printf("process %v OneMapDone %v\n", args.Worker, args.DoneMf)
 			files, _ := ioutil.ReadDir(".")
 			for _, file := range files {
-				if strings.HasPrefix(file.Name(), "mr-" + fmt.Sprintf("%v%v", args.Worker, args.Turn) + "-") {
-					fmt.Printf("deleting %v\n", file.Name())
+				// os.Rename()不支持带./的，刚好../和pg-都是3个字符且没用，.txt是最后四个也删掉(不过这个好像没有影响)
+				if strings.HasPrefix(file.Name(), "mr-" + fmt.Sprintf("%v-%v", args.DoneMf[3:len(args.DoneMf)-4], args.Worker) + "-") {
+					fmt.Printf("renaming %v\n", file.Name())
 					os.Rename(filepath.Join(".", file.Name()), filepath.Join(".", file.Name()[:len(file.Name())-1]))				
 				}
 			}
@@ -110,7 +110,6 @@ func (c* Coordinator) OneReduceDone(args *ReduceArgs, reply *ReduceReply) error 
 	if args.ReduceTask != "" {
 		_, ok := c.register[args.Worker]
 		if !ok {  // 被炒鱿鱼
-			reply.GotFired = true
 			fmt.Printf("fire process %v, reduce task %v transfered to others, local-deleting\n", args.Worker, args.ReduceTask)
 			files, _ := ioutil.ReadDir(".")
 			for _, file := range files {
@@ -122,7 +121,7 @@ func (c* Coordinator) OneReduceDone(args *ReduceArgs, reply *ReduceReply) error 
 		} else {
 			c.reduceTask[args.ReduceTask] = true
 			delete(c.register, args.Worker)
-			fmt.Printf("process %v OneMapDone %v\n", args.Worker, args.ReduceTask)
+			fmt.Printf("process %v OneReduceDone %v\n", args.Worker, args.ReduceTask)
 			files, _ := ioutil.ReadDir(".")
 			for _, file := range files {
 				if file.Name() == fmt.Sprintf("mr-out-%v-%v", args.ReduceTask, args.Worker) {

@@ -61,11 +61,10 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	var AllDone bool
 	// 轮询直到coordinator所有map任务都被完成
-	turn := 0
 	for !AllDone {
 		// 申请并完成被分配的map任务
 		reply := MapReply{}
-		MapTaskWorker(mapf, &reply, turn)
+		MapTaskWorker(mapf, &reply)
 		// 每过几秒向coordinator询问空闲map任务
 		time.Sleep(time.Second)
 		// args := MapArgs{}
@@ -73,7 +72,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		// ok := call("Coordinator.MapDone", &args, &reply)
 		// if ok {
 			AllDone = reply.AllDone
-			turn++
 		// } else {
 		// 	log.Fatalf("fail to call MapDone")
 		// }
@@ -101,7 +99,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	// CallExample()
 }
 
-func MapTaskWorker(mapf func(string, string) []KeyValue, doneReply *MapReply, turn int) {
+func MapTaskWorker(mapf func(string, string) []KeyValue, doneReply *MapReply) {
 	// 函数体内包含两次call通讯，但因为同一进程的顺序执行，只有不同进程的call调用才可能会带来共享内存数据冲突的问题
 	args := MapArgs{}
 	args.Worker = os.Getpid()
@@ -124,15 +122,10 @@ func MapTaskWorker(mapf func(string, string) []KeyValue, doneReply *MapReply, tu
 		// 将[]KeyValue写入对应文件中
 		sort.Sort(ByKeyHash(intermediate))
 		i := 0
-		var ofile *os.File
 		for i < len(intermediate) {
 			hashgroup := ihash(intermediate[i].Key) % NReduce
-			ofilename := fmt.Sprintf("mr-%v-%v-", fmt.Sprintf("%v%v", args.Worker, turn), hashgroup)
-			if _, err := os.Stat(ofilename); os.IsNotExist(err) {
-				ofile, _ = os.Create(ofilename)
-			} else {
-				ofile, _ = os.OpenFile(ofilename, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
-			}
+			ofilename := fmt.Sprintf("mr-%v-%v-", fmt.Sprintf("%s-%v", reply.Mf[3:len(reply.Mf)-4], args.Worker), hashgroup)
+			ofile, _ := ioutil.TempFile(".", fmt.Sprintf("tMFile-%v", args.Worker))
 
 			j := i + 1
 			for j < len(intermediate) && ihash(intermediate[j].Key) % NReduce == hashgroup {
@@ -144,11 +137,14 @@ func MapTaskWorker(mapf func(string, string) []KeyValue, doneReply *MapReply, tu
 				enc.Encode(&intermediate[k])  // json化键值对并写入文件
 			}
 			buf.Flush() // 将缓冲区的内容一次性写入文件
+			err := os.Rename(ofile.Name(), ofilename)
+			if err != nil {
+				log.Fatalf("error renaming %v", reply.Mf)
+			}
 			ofile.Close()
 			i = j 
 		}
 		args.DoneMf = reply.Mf
-		args.Turn = turn
 		ok := call("Coordinator.OneMapDone", &args, &doneReply)
 		if !ok {
 			log.Fatalf("fail to call OneMapDone")
@@ -173,7 +169,7 @@ func ReduceTaskWorker(reducef func(string, []string) string, doneReply *ReduceRe
 		fmt.Printf(" reduce task is file mr-out-%v\n", reply.Reducer)
 		files, _ := ioutil.ReadDir(".")
 		// 多个文件可能包含相同的键值对，因而不止需要对单个中间文件归约，而是所有面向该reducer的文件归约
-		ofile, _ := ioutil.TempFile(".", "tempFile" + reply.Reducer)
+		ofile, _ := ioutil.TempFile(".", "tRFile" + reply.Reducer)
 		var kva []KeyValue
 		for _, file := range files {
 			if strings.HasSuffix(file.Name(), "-" + reply.Reducer) && !strings.HasSuffix(file.Name(), "out-" + reply.Reducer) {
